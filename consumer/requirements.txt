@@ -1,0 +1,8 @@
+# Kafka client (official Confluent Python client)
+confluent-kafka==2.3.0
+
+# PostgreSQL adapter for Python (modern psycopg 3)
+psycopg[binary]==3.2.12
+
+# Environment variables
+python-dotenv==1.0.0

@@ -1,0 +1,159 @@
+services:
+  # Kafka broker with KRaft (no Zookeeper required)
+  kafka:
+    image: apache/kafka:4.1.1
+    container_name: smart_meter_kafka
+    ports:
+      - "${KAFKA_PORT:-9092}:9092"
+    environment:
+      # KRaft mode configuration
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+
+      # Listener configuration
+      # PLAINTEXT for Docker internal, PLAINTEXT_HOST for external access
+      KAFKA_LISTENERS: 'PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9094,CONTROLLER://0.0.0.0:9093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:${KAFKA_PORT:-9092}'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+
+      # Cluster configuration (valid UUID required for KRaft)
+      CLUSTER_ID: 'MkU3OEVBNTcwNTJENDM2Qk'
+
+      # Topic and replication settings (single broker)
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_DEFAULT_REPLICATION_FACTOR: 1
+      KAFKA_MIN_INSYNC_REPLICAS: 1
+
+      # Auto-create topics (convenient for development)
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: 'true'
+
+      # Performance tuning for high-volume meter readings
+      KAFKA_NUM_PARTITIONS: 4
+      KAFKA_COMPRESSION_TYPE: 'snappy'
+
+      # Retention policy (7 days to match TimescaleDB compression)
+      KAFKA_LOG_RETENTION_HOURS: 168
+      KAFKA_LOG_RETENTION_BYTES: -1
+      KAFKA_LOG_SEGMENT_BYTES: 1073741824  # 1GB segments
+
+      # JVM heap (adjust based on available memory)
+      KAFKA_HEAP_OPTS: '-Xmx1G -Xms1G'
+
+      # Log directories
+      KAFKA_LOG_DIRS: '/var/lib/kafka/data'
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    networks:
+      - smart_meter_network
+    healthcheck:
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # Meter Data Producer - Simulates smart meter readings
+  producer:
+    build:
+      context: ./producer
+      dockerfile: Dockerfile
+    container_name: smart_meter_producer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    environment:
+      # Connect to Kafka using internal Docker network (PLAINTEXT listener on 9092)
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-meter_readings}
+      METER_COUNT: ${METER_COUNT:-1000}
+      READING_INTERVAL_MINUTES: ${READING_INTERVAL_MINUTES:-15}
+    networks:
+      - smart_meter_network
+    restart: unless-stopped
+
+  # Meter Data Consumer - Reads from Kafka and writes to TimescaleDB
+  consumer:
+    build:
+      context: ./consumer
+      dockerfile: Dockerfile
+    container_name: smart_meter_consumer
+    depends_on:
+      kafka:
+        condition: service_healthy
+      timescaledb:
+        condition: service_healthy
+    environment:
+      # Kafka configuration
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-meter_readings}
+      KAFKA_GROUP_ID: meter-consumer-group
+      # Database configuration
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-smart_meter_db}
+      POSTGRES_USER: ${POSTGRES_USER:-meter_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meter_pass_2024}
+      # Performance tuning
+      BATCH_SIZE: 1000
+    networks:
+      - smart_meter_network
+    restart: unless-stopped
+
+  # Kafka Monitor - Queue visibility
+  monitor:
+    build:
+      context: ./monitor
+      dockerfile: Dockerfile
+    container_name: smart_meter_monitor
+    depends_on:
+      kafka:
+        condition: service_healthy
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: kafka:9092
+      KAFKA_TOPIC: ${KAFKA_TOPIC:-meter_readings}
+      KAFKA_GROUP_ID: meter-consumer-group
+      MONITOR_INTERVAL: 10
+    networks:
+      - smart_meter_network
+    restart: unless-stopped
+
+  # TimescaleDB
+  timescaledb:
+    image: timescale/timescaledb:2.23.1-pg17
+    container_name: smart_meter_timescaledb
+    environment:
+      - POSTGRES_DB=${POSTGRES_DB:-smart_meter_db}
+      - POSTGRES_USER=${POSTGRES_USER:-meter_admin}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD:-meter_pass_2024}
+      - TIMESCALEDB_TELEMETRY=${TIMESCALEDB_TELEMETRY:-off}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - timescaledb_data:/var/lib/postgresql/data
+      - ./database/init_scripts:/docker-entrypoint-initdb.d
+    healthcheck:
+      # Check that DB is ready AND initialization is complete (dim_meters table exists and has data)
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meter_admin} -d ${POSTGRES_DB:-smart_meter_db} && psql -U ${POSTGRES_USER:-meter_admin} -d ${POSTGRES_DB:-smart_meter_db} -tAc \"SELECT COUNT(*) > 0 FROM dim_meters;\" | grep -q t"]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+      start_period: 60s
+    networks:
+      - smart_meter_network
+
+volumes:
+  kafka_data:
+    driver: local
+  timescaledb_data:
+    driver: local
+
+networks:
+  smart_meter_network:
+    driver: bridge
