@@ -79,11 +79,11 @@ services:
     restart: unless-stopped
 
   # Meter Data Consumer - Reads from Kafka and writes to TimescaleDB
+  # Scalable: docker compose up -d --scale consumer=4 (max 4 for 4 partitions)
   consumer:
     build:
       context: ./consumer
       dockerfile: Dockerfile
-    container_name: smart_meter_consumer
     depends_on:
       kafka:
         condition: service_healthy
@@ -147,6 +147,30 @@ services:
       start_period: 60s
     networks:
       - smart_meter_network
+
+  # dbt - Data transformation layer
+  dbt:
+    build:
+      context: ./dbt_transform
+      dockerfile: Dockerfile
+    container_name: smart_meter_dbt
+    depends_on:
+      timescaledb:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: timescaledb
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-smart_meter_db}
+      POSTGRES_USER: ${POSTGRES_USER:-meter_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-meter_pass_2024}
+    volumes:
+      - ./dbt_transform:/dbt
+    networks:
+      - smart_meter_network
+    # By default, just run dbt debug to verify connection
+    # Override with: docker compose run dbt <command>
+    command: ["dbt", "debug"]
+    profiles: ["manual"]  # Don't start automatically, run manually
 
 volumes:
   kafka_data:

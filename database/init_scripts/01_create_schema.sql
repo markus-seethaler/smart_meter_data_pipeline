@@ -90,13 +90,15 @@ CREATE INDEX idx_dim_meters_grid_zone ON dim_meters(grid_zone_id);
 
 -- Raw meter readings table (main fact table)
 -- Storing readings in milliwatts to avoid decimals and maintain precision
+-- Optimized: INTEGER (4 bytes) instead of BIGINT (8 bytes) - sufficient for meters up to 2.1 MW
+-- Status: CHAR(1) instead of VARCHAR(20) - saves ~8 bytes per record
 -- Supports both consumption and production (e.g., solar panels)
 CREATE TABLE IF NOT EXISTS raw_meter_readings (
     reading_timestamp TIMESTAMPTZ NOT NULL,
     meter_id INTEGER NOT NULL,
-    reading_consumption_milliwatts BIGINT CHECK (reading_consumption_milliwatts >= 0),  -- Energy consumed from grid
-    reading_production_milliwatts BIGINT CHECK (reading_production_milliwatts >= 0),    -- Energy produced (e.g., solar)
-    status VARCHAR(20) DEFAULT 'valid' CHECK (status IN ('valid', 'estimated', 'error')),
+    reading_consumption_milliwatts INTEGER CHECK (reading_consumption_milliwatts >= 0),  -- Energy consumed from grid (milliwatts)
+    reading_production_milliwatts INTEGER CHECK (reading_production_milliwatts >= 0),    -- Energy produced (milliwatts)
+    status CHAR(1) DEFAULT 'V' CHECK (status IN ('V', 'E', 'R')),  -- V=Valid, E=Estimated, R=eRror
     arrived_at TIMESTAMPTZ DEFAULT NOW(),  -- When reading was received/ingested
 
     -- At least one reading must be present
@@ -128,10 +130,10 @@ ALTER TABLE raw_meter_readings
 CREATE INDEX IF NOT EXISTS idx_raw_readings_meter_time
     ON raw_meter_readings (meter_id, reading_timestamp DESC);
 
--- Index for data quality monitoring
+-- Index for data quality monitoring (only index non-valid readings)
 CREATE INDEX IF NOT EXISTS idx_raw_readings_status
     ON raw_meter_readings (status, reading_timestamp DESC)
-    WHERE status != 'valid';
+    WHERE status != 'V';
 
 -- ============================================
 -- COMPRESSION POLICY

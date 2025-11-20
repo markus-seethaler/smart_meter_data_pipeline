@@ -80,27 +80,41 @@ class KafkaTopicManager:
 
 
 class MeterReadingSimulator:
-    """Simulates realistic smart meter readings"""
+    """Simulates realistic smart meter readings with cumulative energy values"""
 
-    def __init__(self, meter_count: int):
+    def __init__(self, meter_count: int, reading_interval_minutes: int):
         self.meter_count = meter_count
+        self.reading_interval_minutes = reading_interval_minutes
+        self.reading_interval_hours = reading_interval_minutes / 60.0
+
+        # Store cumulative readings for each meter (like an odometer)
+        # Starts at 0 when producer starts
+        self.cumulative_consumption_mwh = {}  # meter_id -> cumulative milliwatt-hours
+        self.cumulative_production_mwh = {}   # meter_id -> cumulative milliwatt-hours
+
         logger.info(f"Initialized simulator for {meter_count:,} meters")
+        logger.info(f"Reading interval: {reading_interval_minutes} minutes ({self.reading_interval_hours:.3f} hours)")
 
     def generate_reading(self, meter_id: int, timestamp: Optional[datetime] = None) -> Dict:
         """
-        Generate a realistic meter reading
+        Generate a realistic cumulative meter reading (like an odometer)
 
         Args:
             meter_id: Unique meter identifier
             timestamp: Reading timestamp (defaults to now)
 
         Returns:
-            Dictionary with meter reading data
+            Dictionary with cumulative meter reading data in milliwatt-hours
         """
         if timestamp is None:
             timestamp = datetime.now(timezone.utc)
 
-        # Simulate consumption based on time of day and meter type
+        # Initialize cumulative readings for this meter if first time
+        if meter_id not in self.cumulative_consumption_mwh:
+            self.cumulative_consumption_mwh[meter_id] = 0
+            self.cumulative_production_mwh[meter_id] = 0
+
+        # Simulate INSTANTANEOUS POWER consumption based on time of day
         hour = timestamp.hour
 
         # Base consumption varies by meter type (residential pattern)
@@ -117,11 +131,18 @@ class MeterReadingSimulator:
 
         # Add some randomness (+/- 20%)
         consumption_watts = base_consumption_watts * random.uniform(0.8, 1.2)
-        consumption_milliwatts = int(consumption_watts * 1000)
+        consumption_milliwatts = consumption_watts * 1000
+
+        # Calculate ENERGY consumed during this period: Energy = Power × Time
+        # Convert instantaneous power to energy over the reading interval
+        energy_consumption_mwh = consumption_milliwatts * self.reading_interval_hours
+
+        # Add to cumulative total (like odometer incrementing)
+        self.cumulative_consumption_mwh[meter_id] += energy_consumption_mwh
 
         # 50% of meters have solar panels (production) - we're a solar company!
         has_solar = (meter_id % 2) == 0
-        production_milliwatts = None
+        cumulative_production_mwh = None
 
         if has_solar:
             # Solar production varies by time of day
@@ -130,21 +151,30 @@ class MeterReadingSimulator:
                 solar_factor = 1.0 - abs(hour - 12) / 6
                 peak_production = random.uniform(3000, 6000)  # 3-6 kW peak
                 production_watts = peak_production * solar_factor * random.uniform(0.8, 1.2)
-                production_milliwatts = int(production_watts * 1000)
+                production_milliwatts = production_watts * 1000
             else:
                 production_milliwatts = 0
 
+            # Calculate energy produced during this period
+            energy_production_mwh = production_milliwatts * self.reading_interval_hours
+
+            # Add to cumulative total
+            self.cumulative_production_mwh[meter_id] += energy_production_mwh
+            cumulative_production_mwh = int(self.cumulative_production_mwh[meter_id])
+
         # 1% chance of estimated/error readings (data quality)
+        # V=Valid, E=Estimated, R=eRror (optimized CHAR(1) storage)
         reading_status = random.choices(
-            ['valid', 'estimated', 'error'],
+            ['V', 'E', 'R'],
             weights=[98.0, 1.5, 0.5]
         )[0]
 
+        # Return CUMULATIVE readings (total since meter installation/reset)
         reading = {
             'meter_id': meter_id,
             'reading_timestamp': timestamp.isoformat(),
-            'reading_consumption_milliwatts': consumption_milliwatts,
-            'reading_production_milliwatts': production_milliwatts,
+            'reading_consumption_milliwatts': int(self.cumulative_consumption_mwh[meter_id]),
+            'reading_production_milliwatts': cumulative_production_mwh,
             'status': reading_status
         }
 
@@ -234,7 +264,7 @@ def main():
 
     # Step 2: Initialize components
     logger.info("\n[2/3] Initializing components...")
-    simulator = MeterReadingSimulator(METER_COUNT)
+    simulator = MeterReadingSimulator(METER_COUNT, READING_INTERVAL)
     producer = MeterDataProducer(KAFKA_BOOTSTRAP_SERVERS, KAFKA_TOPIC)
 
     # Step 3: Generate and send readings

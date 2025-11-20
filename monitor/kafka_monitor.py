@@ -128,26 +128,13 @@ class KafkaMonitor:
             for partition, offset in consumer_offsets.items()
         )
 
-        # Calculate rate (messages/sec since last check)
-        current_time = time.time()
-        message_rate = 0
-
-        if self.prev_time and self.prev_offsets:
-            time_delta = current_time - self.prev_time
-            if time_delta > 0:
-                offset_delta = sum(watermarks.get(p, (0, 0))[1] for p in watermarks) - \
-                              sum(self.prev_offsets.get(p, (0, 0))[1] for p in self.prev_offsets)
-                message_rate = offset_delta / time_delta
-
         # Update previous values
         self.prev_offsets = watermarks
-        self.prev_time = current_time
 
         return {
             'total_messages': total_messages,
             'total_consumed': total_consumed,
             'total_lag': total_lag,
-            'message_rate': message_rate,
             'partition_count': len(watermarks),
             'watermarks': watermarks,
             'consumer_offsets': consumer_offsets
@@ -175,7 +162,6 @@ class KafkaMonitor:
                     f"Queue: {metrics['total_messages']:,} msgs | "
                     f"Consumed: {metrics['total_consumed']:,} | "
                     f"Lag: {metrics['total_lag']:,} ({lag_pct:.1f}%) | "
-                    f"Rate: {metrics['message_rate']:,.0f} msg/sec | "
                     f"Partitions: {metrics['partition_count']}"
                 )
 
