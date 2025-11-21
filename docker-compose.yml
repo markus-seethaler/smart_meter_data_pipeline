@@ -74,6 +74,7 @@ services:
       KAFKA_TOPIC: ${KAFKA_TOPIC:-meter_readings}
       METER_COUNT: ${METER_COUNT:-1000}
       READING_INTERVAL_MINUTES: ${READING_INTERVAL_MINUTES:-15}
+      CONTINUOUS_FLOW: ${CONTINUOUS_FLOW:-false}
     networks:
       - smart_meter_network
     restart: unless-stopped

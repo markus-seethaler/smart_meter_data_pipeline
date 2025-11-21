@@ -140,7 +140,7 @@ class MeterReadingSimulator:
         # Add to cumulative total (like odometer incrementing)
         self.cumulative_consumption_mwh[meter_id] += energy_consumption_mwh
 
-        # 50% of meters have solar panels (production) - we're a solar company!
+        # 50% of meters have solar panels (production)
         has_solar = (meter_id % 2) == 0
         cumulative_production_mwh = None
 
@@ -243,17 +243,19 @@ class MeterDataProducer:
 
 
 def main():
-    """Main execution - simplified meter reading generation"""
+    """Main execution - meter reading generation"""
     # Configuration from environment variables
     KAFKA_BOOTSTRAP_SERVERS = os.getenv('KAFKA_BOOTSTRAP_SERVERS', 'localhost:9092')
     KAFKA_TOPIC = os.getenv('KAFKA_TOPIC', 'meter_readings')
     METER_COUNT = int(os.getenv('METER_COUNT', '1000'))
     READING_INTERVAL = int(os.getenv('READING_INTERVAL_MINUTES', '15'))
+    CONTINUOUS_FLOW = os.getenv('CONTINUOUS_FLOW', 'false').lower() == 'true'
 
     logger.info("=" * 80)
     logger.info("Smart Meter Producer")
     logger.info("=" * 80)
     logger.info(f"Meters: {METER_COUNT:,} | Interval: {READING_INTERVAL}min")
+    logger.info(f"Mode: {'Continuous flow' if CONTINUOUS_FLOW else 'Batch (send all at once)'}")
     logger.info("Features: Realistic consumption patterns, 50% solar penetration")
     logger.info("=" * 80)
 
@@ -274,6 +276,11 @@ def main():
     cycle_count = 0
     total_readings_sent = 0
 
+    # Calculate delay per message for continuous flow
+    if CONTINUOUS_FLOW:
+        delay_per_message = (READING_INTERVAL * 60.0) / METER_COUNT
+        logger.info(f"Continuous flow: {delay_per_message*1000:.3f}ms delay per message\n")
+
     try:
         while True:
             cycle_count += 1
@@ -287,6 +294,10 @@ def main():
                 reading = simulator.generate_reading(meter_id, current_timestamp)
                 producer.send_reading(reading)
                 readings_this_cycle += 1
+
+                # If continuous flow, add delay between messages
+                if CONTINUOUS_FLOW:
+                    time.sleep(delay_per_message)
 
             # Flush all messages
             producer.flush()
@@ -303,7 +314,10 @@ def main():
                 f"{batch_duration:.1f}s"
             )
 
-            time.sleep(READING_INTERVAL * 60)
+            # In batch mode, wait for next interval
+            # In continuous flow mode, we already waited during sending
+            if not CONTINUOUS_FLOW:
+                time.sleep(READING_INTERVAL * 60)
 
     except KeyboardInterrupt:
         logger.info("\n" + "=" * 80)

@@ -31,6 +31,9 @@ chmod 644 database/init_scripts/02_populate_dimensions.sql
 # Build and run the Docker compose in the background
 docker compose up -d --build
 
+# If you want to scale the consumer horizontally you can use the following argument (4 consumers is max right now efficiency wise)
+docker compose up -d --build  --scale consumer=4
+
 # On first startup this might take a few minutes depending on your systems capabilities
 ```
 
@@ -45,7 +48,25 @@ docker compose logs -f consumer
 docker compose logs -f producer monitor
 ```
 
-### 3. Stop Services
+### 3. Run Analytics Transformations
+
+After ~30 minutes of data collection, run dbt to generate analytics:
+
+```bash
+# Run dbt models (staging + marts)
+docker compose run --rm dbt dbt run
+
+# Query results
+docker exec smart_meter_timescaledb psql -U meter_admin -d smart_meter_db \
+  -c "SELECT * FROM fact_customer_billing_daily LIMIT 10;"
+```
+
+**Models created:**
+- `stg_meter_readings` - Staging view with delta calculations
+- `fact_customer_billing_daily` - Daily billing by customer
+- `fact_grid_load_hourly` - Hourly grid load by zone
+
+### 4. Stop Services
 
 Keep in mind that the current meter reading of a meter is not persisted in this demo so if you restart all meters start with a 0 reading again.
 
@@ -60,37 +81,42 @@ docker-compose down -v
 
 ### Dimension Tables
 
-- **dim_meters**: Meter metadata (1M meters)
-  - meter_id (PK), meter_idn, customer_id
-  - Location: street, house_number, zip, city
-  - Transformation factors for current and voltage
-  - Gateway identifier
+- **dim_meters**: Meter metadata (1M residential meters, 50% with solar)
+  - meter_id (PK), meter_idn, customer_id (1:1 relationship)
+  - malo_cons, malo_prod (solar production capability)
+  - Gateway identifier, grid zone assignment
 
-- **dim_customers**: Customer information
-  - customer_id (PK), customer_name, customer_type, account_status
+- **dim_customers**: Customer information (1M residential customers)
+  - customer_id (PK), customer_name, account_status
+
+- **dim_tariff_rates**: Single standard residential rate ($0.28/kWh)
 
 ### Fact Tables
 
-- **raw_meter_readings**: Time-series readings (hypertable)
-  - reading_timestamp, meter_id
-  - reading_mw (milliwatts for precision without decimals)
-  - status (valid/estimated/error)
+- **raw_meter_readings**: Time-series cumulative readings (hypertable)
+  - reading_timestamp, meter_id (composite PK)
+  - reading_consumption_milliwatts, reading_production_milliwatts (cumulative)
+  - status (V=Valid, E=Estimated, R=eRror)
   - arrived_at (ingestion timestamp)
 
 ### Performance Features
 
 - **Hypertable**: 1-day chunks for optimal query performance
-- **Compression**: Automatic compression after 1 day
+- **Compression**: Automatic compression after 1 day (3-4x ratio)
 - **Indexes**: Optimized for meter_id + timestamp queries
+- **Storage optimization**: INTEGER (4B) vs BIGINT, CHAR(1) for status
 
 ## Configuration
 
 Environment variables are in `.env`:
 
+- `METER_COUNT`: Number of meters to simulate (default: 1,000,000)
+- `READING_INTERVAL_MINUTES`: Reading frequency (default: 15)
+- `CONTINUOUS_FLOW`: Message sending mode (false=batch, true=continuous)
 - `POSTGRES_DB`: Database name
 - `POSTGRES_USER`: Database user
 - `POSTGRES_PASSWORD`: Database password
-- `POSTGRES_PORT`: Database port (default 5432)
+- `POSTGRES_PORT`: Database port (default: 5432)
 
 ## Data Volume
 

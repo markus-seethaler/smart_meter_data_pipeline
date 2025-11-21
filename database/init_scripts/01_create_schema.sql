@@ -7,22 +7,16 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 -- Note: Tables created in order to satisfy foreign key dependencies
 
 -- Simple tariff rates (no dependencies)
+-- Simplified: Only one rate for residential customers
 CREATE TABLE IF NOT EXISTS dim_tariff_rates (
-    tariff_type VARCHAR(20) PRIMARY KEY,
-    base_rate_per_kwh DECIMAL(6,4) NOT NULL,  -- $ per kWh
-    peak_rate_per_kwh DECIMAL(6,4),           -- For time_of_use plans
-    off_peak_rate_per_kwh DECIMAL(6,4),       -- For time_of_use plans
-    peak_start_hour INTEGER DEFAULT 16 CHECK (peak_start_hour >= 0 AND peak_start_hour < 24),
-    peak_end_hour INTEGER DEFAULT 21 CHECK (peak_end_hour >= 0 AND peak_end_hour < 24)
+    tariff_id INTEGER PRIMARY KEY DEFAULT 1,
+    base_rate_per_kwh DECIMAL(6,4) NOT NULL  -- $ per kWh
 );
 
--- Insert default tariff rates
-INSERT INTO dim_tariff_rates (tariff_type, base_rate_per_kwh, peak_rate_per_kwh, off_peak_rate_per_kwh)
-VALUES
-    ('standard', 0.28, NULL, NULL),
-    ('time_of_use', 0.26, 0.30, 0.22),
-    ('ev_rate', 0.27, 0.32, 0.20)
-ON CONFLICT (tariff_type) DO NOTHING;
+-- Insert default residential tariff rate
+INSERT INTO dim_tariff_rates (tariff_id, base_rate_per_kwh)
+VALUES (1, 0.28)
+ON CONFLICT (tariff_id) DO NOTHING;
 
 -- Grid zones for regional aggregation (no dependencies)
 CREATE TABLE IF NOT EXISTS dim_grid_zones (
@@ -36,19 +30,17 @@ CREATE TABLE IF NOT EXISTS dim_grid_zones (
 
 CREATE INDEX idx_dim_grid_zones_region ON dim_grid_zones(region);
 
--- Customer dimension table (references dim_tariff_rates)
+-- Customer dimension table (residential only)
 CREATE TABLE IF NOT EXISTS dim_customers (
     customer_id INTEGER PRIMARY KEY,
     customer_name VARCHAR(200),
-    customer_type VARCHAR(20) CHECK (customer_type IN ('residential', 'commercial', 'industrial')),
     account_status VARCHAR(20) DEFAULT 'active' CHECK (account_status IN ('active', 'inactive', 'suspended')),
-    tariff_type VARCHAR(20) DEFAULT 'standard' CHECK (tariff_type IN ('standard', 'time_of_use', 'ev_rate')),
     created_at TIMESTAMPTZ DEFAULT NOW(),
-    updated_at TIMESTAMPTZ DEFAULT NOW(),
-    CONSTRAINT fk_customers_tariff FOREIGN KEY (tariff_type) REFERENCES dim_tariff_rates(tariff_type)
+    updated_at TIMESTAMPTZ DEFAULT NOW()
 );
 
 -- Meter metadata/dimension table (references dim_customers and dim_grid_zones)
+-- Simplified: Only residential meters, no transformation factors
 CREATE TABLE IF NOT EXISTS dim_meters (
     meter_id INTEGER PRIMARY KEY,           -- Metering point ID
     meter_idn VARCHAR(50) NOT NULL,         -- Manufacturer assigned meter identification number
@@ -56,11 +48,6 @@ CREATE TABLE IF NOT EXISTS dim_meters (
     melo VARCHAR(50),                       -- Messlokation (metering location identifier)
     malo_cons INTEGER,                      -- Marktlokation consumption
     malo_prod INTEGER,                      -- Marktlokation production
-
-    -- Meter specifications
-    meter_type VARCHAR(20) NOT NULL CHECK (meter_type IN ('residential', 'commercial', 'industrial')),
-    current_transformation_factor INTEGER DEFAULT 1,   -- e.g., 200 means actual current is 200x measured
-    voltage_transformation_factor INTEGER DEFAULT 1,
 
     -- Gateway information
     gateway_idn VARCHAR(50),                -- Smart meter gateway identifier
@@ -79,7 +66,6 @@ CREATE TABLE IF NOT EXISTS dim_meters (
 );
 
 CREATE INDEX idx_dim_meters_customer_id ON dim_meters(customer_id);
-CREATE INDEX idx_dim_meters_type ON dim_meters(meter_type);
 CREATE INDEX idx_dim_meters_gateway ON dim_meters(gateway_idn);
 CREATE INDEX idx_dim_meters_melo ON dim_meters(melo);
 CREATE INDEX idx_dim_meters_grid_zone ON dim_meters(grid_zone_id);
