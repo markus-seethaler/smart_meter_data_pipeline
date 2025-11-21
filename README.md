@@ -122,6 +122,9 @@ docker compose up -d --build
 # If you want to scale the consumer horizontally you can use the following argument (4 consumers is max right now efficiency wise because of 4 partitions)
 docker compose up -d --build  --scale consumer=4
 
+# If you change variables either in code or the .env sometimes Docker caching does not transfer the changes. If this is the case run
+docker compose build --no-cache && docker compose up -d --scale consumer=4
+
 # On first startup this might take a few minutes depending on your systems capabilities for build and database init and population
 ```
 
