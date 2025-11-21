@@ -1,0 +1,33 @@
+version: 2
+
+models:
+  - name: fact_customer_billing_daily
+    description: >
+      Daily customer billing for residential customers.
+      Includes consumption, solar production, and calculated charges at standard rate ($0.28/kWh).
+      Full refresh on each run (table materialization).
+    columns:
+      - name: billing_date
+        description: Date of the billing period
+      - name: customer_id
+        description: Unique customer identifier
+      - name: customer_name
+        description: Customer name
+      - name: total_consumption_kwh
+        description: Total energy consumed from grid in kilowatt-hours
+      - name: total_production_kwh
+        description: Total solar energy produced in kilowatt-hours
+      - name: total_net_consumption_kwh
+        description: Net consumption (consumption - production) in kilowatt-hours
+      - name: consumption_charge
+        description: Total charge for consumption at $0.28/kWh
+      - name: production_credit
+        description: Total credit for solar production at $0.28/kWh
+      - name: net_charge
+        description: Net charge after solar credits ($)
+      - name: meter_count
+        description: Number of meters for this customer (always 1 for residential)
+      - name: has_solar
+        description: Whether customer has solar production capability
+      - name: data_quality_pct
+        description: Percentage of valid readings (vs estimated or error)

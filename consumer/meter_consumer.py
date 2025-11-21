@@ -1,15 +1,13 @@
 #!/usr/bin/env python3
 """
 Smart Meter Data Consumer - Reads meter readings from Kafka and writes to TimescaleDB
-
-Consumes meter reading messages from Kafka and efficiently inserts them into
-the TimescaleDB database
 """
 
 import json
 import logging
 import os
 import signal
+import time
 from datetime import datetime, timezone
 from typing import List, Dict, Optional
 from dotenv import load_dotenv
@@ -26,6 +24,38 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Configuration Constants
+# ============================================================================
+
+class KafkaConfig:
+    """Kafka consumer configuration constants"""
+    MAX_POLL_INTERVAL_MS = 300000  # 5 minutes
+    SESSION_TIMEOUT_MS = 60000     # 1 minute
+    POLL_TIMEOUT_SEC = 1.0         # Poll timeout for consumer
+
+
+class BatchConfig:
+    """Batch processing configuration"""
+    DEFAULT_BATCH_SIZE = 1000
+    FLUSH_IDLE_SECONDS = 5         # Flush partial batch after idle time
+    PERIODIC_COMMIT_SECONDS = 10   # Commit offset periodically
+
+
+class LoggingConfig:
+    """Logging frequency configuration"""
+    BATCH_LOG_FREQUENCY = 10       # Log every N batches
+    BATCH_LOG_INTERVAL = 100       # Log every N batches (detailed stats)
+    TIME_LOG_FREQUENCY_SEC = 10    # Log every N seconds
+    IDLE_STATUS_LOG_SEC = 30       # Log idle status every N seconds
+
+
+class DataValidation:
+    """Data validation constants"""
+    REQUIRED_FIELDS = ['meter_id', 'reading_timestamp']
+    DEFAULT_STATUS = 'V'           # Valid status (CHAR(1))
 
 
 class DatabaseWriter:
@@ -92,7 +122,7 @@ class DatabaseWriter:
                         reading['meter_id'],
                         reading.get('reading_consumption_milliwatts'),
                         reading.get('reading_production_milliwatts'),
-                        reading.get('status', 'V'),  # V=Valid (CHAR(1) optimized)
+                        reading.get('status', DataValidation.DEFAULT_STATUS),
                         arrived_at
                     )
                     for reading in readings
@@ -108,7 +138,7 @@ class DatabaseWriter:
                 self.records_written += count
                 self.batches_written += 1
 
-                if self.batches_written % 10 == 0:
+                if self.batches_written % LoggingConfig.BATCH_LOG_FREQUENCY == 0:
                     logger.info(f"Written {self.records_written:,} records ({self.batches_written} batches)")
 
                 return count
@@ -157,8 +187,8 @@ class MeterReadingConsumer:
             'group.id': group_id,
             'auto.offset.reset': 'earliest',  # Start from beginning for first run
             'enable.auto.commit': False,  # Manual commit after successful DB write
-            'max.poll.interval.ms': 300000,  # 5 minutes
-            'session.timeout.ms': 60000,  # 1 minute
+            'max.poll.interval.ms': KafkaConfig.MAX_POLL_INTERVAL_MS,
+            'session.timeout.ms': KafkaConfig.SESSION_TIMEOUT_MS,
         })
 
         # Subscribe to topic
@@ -180,8 +210,7 @@ class MeterReadingConsumer:
             reading = json.loads(message.value().decode('utf-8'))
 
             # Basic validation
-            required_fields = ['meter_id', 'reading_timestamp']
-            if not all(field in reading for field in required_fields):
+            if not all(field in reading for field in DataValidation.REQUIRED_FIELDS):
                 logger.warning(f"Invalid message: missing required fields")
                 return None
 
@@ -200,7 +229,7 @@ class MeterReadingConsumer:
         logger.info("Smart Meter Consumer - Batch INSERT with Deduplication")
         logger.info("=" * 80)
         logger.info(f"Batch size: {self.batch_size:,} | Topic: {self.topic} | Group: meter-consumer-group")
-        logger.info(f"Logging: Every 100 batches or 10 seconds")
+        logger.info(f"Logging: Every {LoggingConfig.BATCH_LOG_INTERVAL} batches or {LoggingConfig.TIME_LOG_FREQUENCY_SEC} seconds")
         logger.info("=" * 80)
         logger.info("Waiting for messages...")
 
@@ -212,14 +241,14 @@ class MeterReadingConsumer:
         try:
             while self.running:
                 # Poll for messages
-                msg = self.consumer.poll(timeout=1.0)
+                msg = self.consumer.poll(timeout=KafkaConfig.POLL_TIMEOUT_SEC)
 
                 if msg is None:
                     # No message - flush any pending batch and log status
                     current_time = datetime.now(timezone.utc)
 
-                    # Flush pending batch if idle for more than 5 seconds
-                    if batch and (current_time - last_commit).total_seconds() > 5:
+                    # Flush pending batch if idle
+                    if batch and (current_time - last_commit).total_seconds() > BatchConfig.FLUSH_IDLE_SECONDS:
                         logger.info(f"Flushing {len(batch)} pending messages from partial batch...")
                         self._flush_batch(batch)
                         self.consumer.commit(asynchronous=False)
@@ -227,7 +256,7 @@ class MeterReadingConsumer:
                         last_commit = current_time
 
                     # Log activity periodically even when idle
-                    if (current_time - last_activity_log).total_seconds() >= 30:
+                    if (current_time - last_activity_log).total_seconds() >= LoggingConfig.IDLE_STATUS_LOG_SEC:
                         if self.messages_processed > 0:
                             logger.info(f"Status: {self.messages_processed:,} records processed so far (waiting for more messages...)")
                         last_activity_log = current_time
@@ -260,8 +289,8 @@ class MeterReadingConsumer:
                     batch = []
                     last_commit = datetime.now(timezone.utc)
 
-                # Periodic commit (every 10 seconds) to avoid losing partial batches
-                if (datetime.now(timezone.utc) - last_commit).total_seconds() > 10:
+                # Periodic commit to avoid losing partial batches
+                if (datetime.now(timezone.utc) - last_commit).total_seconds() > BatchConfig.PERIODIC_COMMIT_SECONDS:
                     if batch:
                         self._flush_batch(batch)
                         self.consumer.commit(asynchronous=False)
@@ -274,11 +303,11 @@ class MeterReadingConsumer:
         except Exception as e:
             logger.error(f"Unexpected error: {e}")
         finally:
-            # Flush remaining messages and commit offset
+            # Flush remaining messages and commit offset when crashing gracefully
             if batch:
                 logger.info(f"Flushing {len(batch)} remaining messages...")
                 self._flush_batch(batch)
-                # CRITICAL: Must commit offset after flushing, or messages will be re-consumed!
+                #  Must commit offset after flushing, or messages will be re-consumed
                 try:
                     self.consumer.commit(asynchronous=False)
                     logger.info("Final offset committed successfully")
@@ -300,18 +329,17 @@ class MeterReadingConsumer:
             logger.info("=" * 80)
 
     def _flush_batch(self, batch: List[Dict]):
-        """Write batch to database using COPY"""
+        """Write batch to database using executemany() with idempotent inserts"""
         if not batch:
             return
 
-        import time as time_module
-        batch_start = time_module.time()
+        batch_start = time.time()
 
         try:
             self.db_writer.write_batch(batch)
 
             # Track performance
-            batch_duration = time_module.time() - batch_start
+            batch_duration = time.time() - batch_start
             self.total_batches += 1
             self.total_db_time += batch_duration
 
@@ -323,7 +351,7 @@ class MeterReadingConsumer:
             total_elapsed = (datetime.now(timezone.utc) - self.start_time).total_seconds() if self.start_time else 1
             overall_throughput = self.messages_processed / total_elapsed if total_elapsed > 0 else 0
 
-            # Log periodically: every 100 batches (100k records) OR every 10 seconds
+            # Log periodically: every N batches OR every N seconds
             current_time = datetime.now(timezone.utc)
             should_log = False
 
@@ -331,11 +359,11 @@ class MeterReadingConsumer:
                 # First batch
                 should_log = True
                 self.last_log_time = current_time
-            elif self.total_batches - self.last_log_batch >= 100:
-                # Every 100 batches
+            elif self.total_batches - self.last_log_batch >= LoggingConfig.BATCH_LOG_INTERVAL:
+                # Every N batches
                 should_log = True
-            elif (current_time - self.last_log_time).total_seconds() >= 10:
-                # Every 10 seconds
+            elif (current_time - self.last_log_time).total_seconds() >= LoggingConfig.TIME_LOG_FREQUENCY_SEC:
+                # Every N seconds
                 should_log = True
 
             if should_log:

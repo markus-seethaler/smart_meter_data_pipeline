@@ -29,6 +29,57 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Configuration Constants
+# ============================================================================
+
+class ConsumptionPatterns:
+    """Residential electricity consumption patterns (watts)"""
+    # Peak hours: morning (6-9am) and evening (5-10pm)
+    PEAK_MIN = 2000
+    PEAK_MAX = 5000
+
+    # Night hours: 10pm-6am (baseline loads)
+    NIGHT_MIN = 500
+    NIGHT_MAX = 1500
+
+    # Day hours: 9am-5pm (moderate usage)
+    DAY_MIN = 1000
+    DAY_MAX = 3000
+
+    # Randomness factor (±20%)
+    VARIATION_MIN = 0.8
+    VARIATION_MAX = 1.2
+
+
+class SolarPatterns:
+    """Solar production patterns (watts)"""
+    DAYLIGHT_START = 6
+    DAYLIGHT_END = 18
+    PEAK_HOUR = 12
+
+    # Peak production capacity
+    PRODUCTION_MIN = 3000
+    PRODUCTION_MAX = 6000
+
+    # Randomness factor (±20%)
+    VARIATION_MIN = 0.8
+    VARIATION_MAX = 1.2
+
+
+class DataQuality:
+    """Reading status distribution"""
+    # Status weights: 98% valid, 1.5% estimated, 0.5% error
+    VALID_THRESHOLD = 98.0
+    ESTIMATED_THRESHOLD = 99.5  # 98.0 + 1.5
+    # Above 99.5 = error
+
+    # Status codes (optimized CHAR(1) storage)
+    STATUS_VALID = 'V'
+    STATUS_ESTIMATED = 'E'
+    STATUS_ERROR = 'R'
+
+
 class KafkaTopicManager:
     """Manages Kafka topic creation and configuration"""
 
@@ -59,7 +110,7 @@ class KafkaTopicManager:
             replication_factor=replication_factor,
             config={
                 'compression.type': 'snappy',  # Fast compression
-                'retention.ms': '604800000',   # 7 days retention (matches TimescaleDB)
+                'retention.ms': '604800000',   # 7 days retention
                 'segment.bytes': '1073741824'  # 1GB segments
             }
         )
@@ -87,7 +138,7 @@ class MeterReadingSimulator:
         self.reading_interval_minutes = reading_interval_minutes
         self.reading_interval_hours = reading_interval_minutes / 60.0
 
-        # Store cumulative readings for each meter (like an odometer)
+        # Store cumulative readings for each meter
         # Starts at 0 when producer starts
         self.cumulative_consumption_mwh = {}  # meter_id -> cumulative milliwatt-hours
         self.cumulative_production_mwh = {}   # meter_id -> cumulative milliwatt-hours
@@ -97,7 +148,7 @@ class MeterReadingSimulator:
 
     def generate_reading(self, meter_id: int, timestamp: Optional[datetime] = None) -> Dict:
         """
-        Generate a realistic cumulative meter reading (like an odometer)
+        Generate a realistic cumulative meter reading
 
         Args:
             meter_id: Unique meter identifier
@@ -117,27 +168,38 @@ class MeterReadingSimulator:
         # Simulate INSTANTANEOUS POWER consumption based on time of day
         hour = timestamp.hour
 
-        # Base consumption varies by meter type (residential pattern)
-        # Higher during morning (6-9am) and evening (5-10pm)
+        # Base consumption varies by time of day (residential pattern)
         if 6 <= hour < 9 or 17 <= hour < 22:
-            # Peak hours: 2-5 kW for residential
-            base_consumption_watts = random.uniform(2000, 5000)
+            # Peak hours: morning and evening
+            base_consumption_watts = random.uniform(
+                ConsumptionPatterns.PEAK_MIN,
+                ConsumptionPatterns.PEAK_MAX
+            )
         elif 22 <= hour or hour < 6:
-            # Night: 0.5-1.5 kW (baseline loads)
-            base_consumption_watts = random.uniform(500, 1500)
+            # Night: baseline loads
+            base_consumption_watts = random.uniform(
+                ConsumptionPatterns.NIGHT_MIN,
+                ConsumptionPatterns.NIGHT_MAX
+            )
         else:
-            # Day: 1-3 kW
-            base_consumption_watts = random.uniform(1000, 3000)
+            # Day: moderate usage
+            base_consumption_watts = random.uniform(
+                ConsumptionPatterns.DAY_MIN,
+                ConsumptionPatterns.DAY_MAX
+            )
 
-        # Add some randomness (+/- 20%)
-        consumption_watts = base_consumption_watts * random.uniform(0.8, 1.2)
+        # Add randomness (±20%)
+        consumption_watts = base_consumption_watts * random.uniform(
+            ConsumptionPatterns.VARIATION_MIN,
+            ConsumptionPatterns.VARIATION_MAX
+        )
         consumption_milliwatts = consumption_watts * 1000
 
         # Calculate ENERGY consumed during this period: Energy = Power × Time
         # Convert instantaneous power to energy over the reading interval
         energy_consumption_mwh = consumption_milliwatts * self.reading_interval_hours
 
-        # Add to cumulative total (like odometer incrementing)
+        # Add to cumulative total
         self.cumulative_consumption_mwh[meter_id] += energy_consumption_mwh
 
         # 50% of meters have solar panels (production)
@@ -146,11 +208,17 @@ class MeterReadingSimulator:
 
         if has_solar:
             # Solar production varies by time of day
-            if 6 <= hour < 18:  # Daylight hours
+            if SolarPatterns.DAYLIGHT_START <= hour < SolarPatterns.DAYLIGHT_END:
                 # Peak solar around noon
-                solar_factor = 1.0 - abs(hour - 12) / 6
-                peak_production = random.uniform(3000, 6000)  # 3-6 kW peak
-                production_watts = peak_production * solar_factor * random.uniform(0.8, 1.2)
+                solar_factor = 1.0 - abs(hour - SolarPatterns.PEAK_HOUR) / 6
+                peak_production = random.uniform(
+                    SolarPatterns.PRODUCTION_MIN,
+                    SolarPatterns.PRODUCTION_MAX
+                )
+                production_watts = peak_production * solar_factor * random.uniform(
+                    SolarPatterns.VARIATION_MIN,
+                    SolarPatterns.VARIATION_MAX
+                )
                 production_milliwatts = production_watts * 1000
             else:
                 production_milliwatts = 0
@@ -162,12 +230,15 @@ class MeterReadingSimulator:
             self.cumulative_production_mwh[meter_id] += energy_production_mwh
             cumulative_production_mwh = int(self.cumulative_production_mwh[meter_id])
 
-        # 1% chance of estimated/error readings (data quality)
-        # V=Valid, E=Estimated, R=eRror (optimized CHAR(1) storage)
-        reading_status = random.choices(
-            ['V', 'E', 'R'],
-            weights=[98.0, 1.5, 0.5]
-        )[0]
+        # Data quality simulation: 98% valid, 1.5% estimated, 0.5% error
+        # Optimized: use single random() call instead of choices()
+        rand = random.random() * 100
+        if rand < DataQuality.VALID_THRESHOLD:
+            reading_status = DataQuality.STATUS_VALID
+        elif rand < DataQuality.ESTIMATED_THRESHOLD:
+            reading_status = DataQuality.STATUS_ESTIMATED
+        else:
+            reading_status = DataQuality.STATUS_ERROR
 
         # Return CUMULATIVE readings (total since meter installation/reset)
         reading = {

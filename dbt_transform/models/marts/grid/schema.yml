@@ -1,0 +1,37 @@
+version: 2
+
+models:
+  - name: fact_grid_load_hourly
+    description: >
+      Hourly grid load aggregated by grid zone for monitoring capacity and utilization.
+      Includes consumption, production, net load, and capacity metrics.
+      Full refresh on each run (table materialization).
+    columns:
+      - name: load_hour
+        description: Hour of the load measurement
+      - name: grid_zone_id
+        description: Unique grid zone identifier
+      - name: zone_name
+        description: Name of the grid zone
+      - name: zone_type
+        description: Type of zone (urban, suburban, rural)
+      - name: max_capacity_megawatts
+        description: Maximum capacity of the zone in megawatts
+      - name: total_consumption_kw
+        description: Total energy consumed in the zone in kilowatts
+      - name: total_production_kw
+        description: Total solar energy produced in the zone in kilowatts
+      - name: total_net_consumption_kw
+        description: Net consumption (consumption - production) in kilowatts
+      - name: total_net_consumption_mw
+        description: Net consumption in megawatts (for capacity comparison)
+      - name: capacity_utilization_pct
+        description: Percentage of max capacity being utilized
+      - name: is_peak_load
+        description: Flag indicating if zone is over 80% capacity (peak load)
+      - name: is_critical_load
+        description: Flag indicating if zone is over 95% capacity (critical load)
+      - name: active_meter_count
+        description: Number of active meters in this hour
+      - name: data_quality_pct
+        description: Percentage of valid readings (vs estimated or error)

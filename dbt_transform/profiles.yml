@@ -1,0 +1,15 @@
+smart_meter:
+  target: dev
+  outputs:
+    dev:
+      type: postgres
+      host: "{{ env_var('POSTGRES_HOST', 'timescaledb') }}"
+      port: "{{ env_var('POSTGRES_PORT', '5432') | as_number }}"
+      user: "{{ env_var('POSTGRES_USER', 'meter_admin') }}"
+      password: "{{ env_var('POSTGRES_PASSWORD', 'meter_pass_2024') }}"
+      dbname: "{{ env_var('POSTGRES_DB', 'smart_meter_db') }}"
+      schema: public
+      threads: 4
+      keepalives_idle: 0
+      connect_timeout: 10
+      search_path: public

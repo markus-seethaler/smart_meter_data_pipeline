@@ -1,0 +1,34 @@
+version: 2
+
+models:
+  - name: stg_meter_readings
+    description: >
+      Staging view for raw meter readings with unit conversions and data quality flags.
+      Converts milliwatts to kilowatts and adds calculated fields for easier analysis.
+    columns:
+      - name: reading_timestamp
+        description: Timestamp of the meter reading
+      - name: meter_id
+        description: Unique meter identifier
+      - name: reading_consumption_milliwatts
+        description: Raw consumption reading in milliwatts
+      - name: reading_production_milliwatts
+        description: Raw production reading in milliwatts (NULL if no solar)
+      - name: status
+        description: "Reading status: V=Valid, E=Estimated, R=eRror"
+      - name: arrived_at
+        description: Timestamp when reading arrived at database
+      - name: consumption_kw
+        description: Consumption converted to kilowatts
+      - name: production_kw
+        description: Production converted to kilowatts
+      - name: net_consumption_kw
+        description: Net consumption (consumption - production) in kilowatts
+      - name: is_valid
+        description: Flag indicating valid reading (status = V)
+      - name: is_estimated
+        description: Flag indicating estimated reading (status = E)
+      - name: is_error
+        description: Flag indicating error reading (status = R)
+      - name: has_solar
+        description: Flag indicating meter has solar production capability

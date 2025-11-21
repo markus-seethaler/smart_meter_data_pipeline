@@ -1,0 +1,90 @@
+version: 2
+
+sources:
+  - name: smart_meter
+    description: Raw smart meter data from TimescaleDB
+    database: smart_meter_db
+    schema: public
+    tables:
+      - name: raw_meter_readings
+        description: Raw time-series meter readings from Kafka stream
+        columns:
+          - name: reading_timestamp
+            description: Timestamp of the meter reading
+            data_tests:
+              - not_null
+          - name: meter_id
+            description: Unique identifier for the meter
+            data_tests:
+              - not_null
+          - name: reading_consumption_milliwatts
+            description: Energy consumption in milliwatts
+          - name: reading_production_milliwatts
+            description: Solar energy production in milliwatts
+          - name: status
+            description: "Reading status: V=Valid, E=Estimated, R=eRror"
+            data_tests:
+              - accepted_values:
+                  values: ['V', 'E', 'R']
+          - name: arrived_at
+            description: Timestamp when reading arrived at the database
+
+      - name: dim_meters
+        description: Dimension table for residential meter metadata
+        columns:
+          - name: meter_id
+            description: Unique identifier for the meter
+            data_tests:
+              - unique
+              - not_null
+          - name: meter_idn
+            description: Meter identification number
+          - name: customer_id
+            description: Reference to customer (1:1 relationship)
+          - name: grid_zone_id
+            description: Reference to grid zone
+          - name: melo
+            description: Meter location
+          - name: malo_cons
+            description: Measurement location for consumption
+          - name: malo_prod
+            description: Measurement location for production (NULL if no solar)
+
+      - name: dim_customers
+        description: Dimension table for residential customer information
+        columns:
+          - name: customer_id
+            description: Unique identifier for customer
+            data_tests:
+              - unique
+              - not_null
+          - name: customer_name
+            description: Customer name
+          - name: account_status
+            description: "Account status: active, inactive, suspended"
+
+      - name: dim_grid_zones
+        description: Dimension table for grid zones
+        columns:
+          - name: grid_zone_id
+            description: Unique identifier for grid zone
+            data_tests:
+              - unique
+              - not_null
+          - name: zone_name
+            description: Name of the grid zone
+          - name: zone_type
+            description: "Zone type: urban, suburban, rural"
+          - name: max_capacity_megawatts
+            description: Maximum capacity in megawatts
+
+      - name: dim_tariff_rates
+        description: Single standard residential tariff rate
+        columns:
+          - name: tariff_id
+            description: Tariff identifier (always 1)
+            data_tests:
+              - unique
+              - not_null
+          - name: base_rate_per_kwh
+            description: Standard residential rate per kilowatt-hour ($0.28)
