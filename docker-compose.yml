@@ -144,7 +144,7 @@ services:
       test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-meter_admin} -d ${POSTGRES_DB:-smart_meter_db} && psql -U ${POSTGRES_USER:-meter_admin} -d ${POSTGRES_DB:-smart_meter_db} -tAc \"SELECT COUNT(*) > 0 FROM dim_meters;\" | grep -q t"]
       interval: 10s
       timeout: 10s
-      retries: 30
+      retries: 40
       start_period: 60s
     networks:
       - smart_meter_network
@@ -168,10 +168,8 @@ services:
       - ./dbt_transform:/dbt
     networks:
       - smart_meter_network
-    # By default, just run dbt debug to verify connection
-    # Override with: docker compose run dbt <command>
     command: ["dbt", "debug"]
-    profiles: ["manual"]  # Don't start automatically, run manually
+    profiles: ["manual"]  # Only runs when explicitly called: docker compose run dbt <command>
 
 volumes:
   kafka_data:

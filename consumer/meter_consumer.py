@@ -128,7 +128,7 @@ class DatabaseWriter:
                     for reading in readings
                 ]
 
-                # Execute batch insert (MUCH faster than loop with execute())
+                # Execute batch insert
                 cursor.executemany(insert_query, data)
 
                 # Commit transaction

@@ -4,7 +4,6 @@ CREATE EXTENSION IF NOT EXISTS timescaledb;
 -- ============================================
 -- DIMENSION TABLES
 -- ============================================
--- Note: Tables created in order to satisfy foreign key dependencies
 
 -- Simple tariff rates (no dependencies)
 -- Simplified: Only one rate for residential customers
@@ -24,7 +23,7 @@ CREATE TABLE IF NOT EXISTS dim_grid_zones (
     zone_name VARCHAR(100) NOT NULL,
     region VARCHAR(100) NOT NULL,
     zone_type VARCHAR(20) CHECK (zone_type IN ('urban', 'suburban', 'rural')),
-    max_capacity_megawatts INTEGER,  -- Renamed for clarity (was max_capacity_mw)
+    max_capacity_megawatts INTEGER,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -95,7 +94,7 @@ CREATE TABLE IF NOT EXISTS raw_meter_readings (
 );
 
 -- Create hypertable for time-series optimization
--- Using 1-day chunks for better daily analytics performance (changed from 7 days)
+-- Using 1-day chunks for better daily analytics performance
 SELECT create_hypertable('raw_meter_readings', 'reading_timestamp',
     chunk_time_interval => INTERVAL '1 day',
     if_not_exists => TRUE
@@ -109,8 +108,6 @@ ALTER TABLE raw_meter_readings
 
 -- Foreign key constraint intentionally omitted for raw_meter_readings
 -- Rationale: High-volume streaming data should be ingested without referential integrity checks
--- Data quality and referential integrity will be enforced in the transformation layer (dbt)
--- This ensures maximum ingestion performance and prevents data loss from missing dimension records
 
 -- Create indexes for common query patterns
 CREATE INDEX IF NOT EXISTS idx_raw_readings_meter_time

@@ -4,7 +4,6 @@
 -- This script runs after 01_create_schema.sql
 -- Generates realistic dimension data for 1M meters with proper relationships:
 --   - Residential ONLY: 1 customer = 1 meter (1:1)
---   - Solar: 50% of all meters have solar production (we're a solar company!)
 
 -- ============================================
 -- GRID ZONES
@@ -124,50 +123,3 @@ BEGIN
     RAISE NOTICE '================================================================';
     RAISE NOTICE '';
 END $$;
-
--- ============================================
--- HELPER VIEWS
--- ============================================
-
--- Summary view for quick dimension checks
-CREATE OR REPLACE VIEW v_dimension_summary AS
-SELECT
-    'Grid Zones' AS dimension,
-    COUNT(*)::TEXT AS count,
-    NULL AS details
-FROM dim_grid_zones
-UNION ALL
-SELECT
-    'Customers (Residential)',
-    COUNT(*)::TEXT,
-    json_build_object(
-        'active', COUNT(*) FILTER (WHERE account_status = 'active'),
-        'inactive', COUNT(*) FILTER (WHERE account_status = 'inactive'),
-        'suspended', COUNT(*) FILTER (WHERE account_status = 'suspended')
-    )::TEXT
-FROM dim_customers
-UNION ALL
-SELECT
-    'Meters (Residential)',
-    COUNT(*)::TEXT,
-    json_build_object(
-        'with_solar', COUNT(*) FILTER (WHERE malo_prod IS NOT NULL),
-        'solar_pct', ROUND(COUNT(*) FILTER (WHERE malo_prod IS NOT NULL)::NUMERIC / COUNT(*) * 100, 1)
-    )::TEXT
-FROM dim_meters;
-
--- View to show customer-to-meter relationships (1:1 for residential)
-CREATE OR REPLACE VIEW v_customer_meter_counts AS
-SELECT
-    c.customer_id,
-    c.customer_name,
-    c.account_status,
-    m.meter_id,
-    CASE WHEN m.malo_prod IS NOT NULL THEN TRUE ELSE FALSE END AS has_solar
-FROM dim_customers c
-LEFT JOIN dim_meters m ON c.customer_id = m.customer_id
-ORDER BY c.customer_id;
-
--- Grant access to all views
-GRANT SELECT ON v_dimension_summary TO meter_admin;
-GRANT SELECT ON v_customer_meter_counts TO meter_admin;

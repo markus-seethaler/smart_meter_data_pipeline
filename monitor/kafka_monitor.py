@@ -6,7 +6,6 @@ Monitors:
 - Topic message count and rate
 - Consumer group lag
 - Partition distribution
-- Throughput trends
 """
 
 import os
@@ -40,7 +39,7 @@ class KafkaMonitor:
         # Admin client for metadata
         self.admin_client = AdminClient({'bootstrap.servers': bootstrap_servers})
 
-        # Consumer for watermark checks (separate group so we don't interfere)
+        # Consumer for watermark checks
         self.consumer = Consumer({
             'bootstrap.servers': bootstrap_servers,
             'group.id': f"{group_id}-monitor",
@@ -76,7 +75,7 @@ class KafkaMonitor:
                         TopicPartition(self.topic, partition_id),
                         timeout=5
                     )
-                    watermarks[partition_id] = (0, high)  # We only care about high watermark
+                    watermarks[partition_id] = (0, high)
                 except KafkaException:
                     watermarks[partition_id] = (0, 0)
 
